@@ -1,0 +1,257 @@
+// Prisma schema - Sistem Informasi Uang Kas Kelas & Komite
+// GIIS Grade 6 Jannatul Firdaus
+//
+// Monetary values use Decimal(14,2) - never Int/Float - to avoid rounding errors.
+// The service layer converts them to `number` for API responses (see common/utils/money.ts).
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" untuk mesin dev, "debian-openssl-3.0.x" untuk image Docker
+  // (node:22-bookworm-slim). Tanpa ini Prisma gagal saat boot di dalam container.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Kategori pemasukan. KAS_KELAS & KOMITE terikat ke Student dan punya aturan
+/// lunas; UMUM bebas nominal dan boleh tanpa student.
+enum IncomeCategoryType {
+  KAS_KELAS
+  KOMITE
+  UMUM
+}
+
+enum PaymentMethod {
+  TRANSFER
+  CASH
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id               String    @id @default(uuid())
+  username         String    @unique
+  passwordHash     String
+  /// Berapa kali gagal login beruntun sebelum akun dikunci.
+  failedLoginCount Int       @default(0)
+  /// Akun terkunci sampai waktu ini (null = tidak terkunci).
+  lockedUntil      DateTime?
+  lastLogin        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  loginLogs LoginLog[]
+
+  @@map("users")
+}
+
+model LoginLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  ip        String
+  userAgent String?
+  success   Boolean
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([timestamp])
+  @@index([userId])
+  @@map("login_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Pengaturan key-value (rekening, info popup, telegram bot token, chat id, dll)
+// ---------------------------------------------------------------------------
+
+model Setting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  /// Nilai sensitif (mis. telegram bot token) disembunyikan di respons API.
+  isSecret    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// Master data
+// ---------------------------------------------------------------------------
+
+model AcademicYear {
+  id         String  @id @default(uuid())
+  /// "nama masa" mis. "2026/2027"
+  name       String  @unique
+  /// Bulan mulai, 1-12 (1 = Januari)
+  startMonth Int
+  /// Bulan selesai, 1-12 (12 = Desember)
+  endMonth   Int
+  isActive   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  incomes Income[]
+
+  @@map("academic_years")
+}
+
+/// Rekening penampung iuran. Hanya boleh ada SATU rekening dengan isPublic=true,
+/// dan hanya rekening itulah yang ditampilkan lewat API publik.
+model BankAccount {
+  id            String  @id @default(uuid())
+  bankName      String  @db.VarChar(120)
+  accountNumber String  @db.VarChar(40)
+  accountHolder String  @db.VarChar(160)
+  /// Tampilkan rekening ini di halaman publik.
+  isPublic      Boolean @default(false)
+  isActive      Boolean @default(true)
+  description   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isPublic])
+  @@map("bank_accounts")
+}
+
+/// Informasi yang ditampilkan sebagai popup di halaman publik.
+model PopupInfo {
+  id       String    @id @default(uuid())
+  title    String    @db.VarChar(160)
+  content  String
+  isActive Boolean   @default(true)
+  order    Int       @default(0)
+  /// Kosong = tidak ada batas waktu.
+  startAt  DateTime?
+  endAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
+  @@map("popup_infos")
+}
+
+model Student {
+  id                String  @id @default(uuid())
+  name              String  @db.VarChar(120)
+  statusKasLunas    Boolean @default(false)
+  statusKomiteLunas Boolean @default(false)
+  /// Total kumulatif iuran kas kelas yang sudah dibayar (dihitung oleh service).
+  totalKasPaid      Decimal @default(0) @db.Decimal(14, 2)
+  /// Total kumulatif iuran komite yang sudah dibayar (dihitung oleh service).
+  totalKomitePaid   Decimal @default(0) @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  incomes Income[]
+
+  @@index([name])
+  @@map("students")
+}
+
+model IncomeCategory {
+  id       String             @id @default(uuid())
+  name     IncomeCategoryType @unique
+  label    String
+  isActive Boolean            @default(true)
+  order    Int                @default(0)
+
+  incomes Income[]
+
+  @@map("income_categories")
+}
+
+// ---------------------------------------------------------------------------
+// Transaksi
+// ---------------------------------------------------------------------------
+
+model Income {
+  id            String        @id @default(uuid())
+  /// Tanggal transaksi (bukan tanggal input), default hari ini.
+  date          DateTime      @default(now())
+  /// Wajib untuk KAS_KELAS & KOMITE, boleh null untuk UMUM.
+  studentId     String?
+  amount        Decimal       @db.Decimal(14, 2)
+  description   String?
+  paymentMethod PaymentMethod
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  categoryId     String
+  academicYearId String
+
+  student      Student?       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  category     IncomeCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  /// Bukti transfer (wajib minimal 1 file bila paymentMethod = TRANSFER).
+  proofs       IncomeProof[]
+
+  @@index([studentId])
+  @@index([categoryId])
+  @@index([academicYearId])
+  @@index([date])
+  @@map("incomes")
+}
+
+model IncomeProof {
+  id           String   @id @default(uuid())
+  /// Nama file di dalam UPLOAD_DIR (sudah di-prefix uuid).
+  fileName     String   @unique
+  originalName String
+  mimeType     String
+  size         Int
+  createdAt    DateTime @default(now())
+
+  incomeId String
+  income   Income @relation(fields: [incomeId], references: [id], onDelete: Cascade)
+
+  @@index([incomeId])
+  @@map("income_proofs")
+}
+
+model Expense {
+  id            String        @id @default(uuid())
+  /// Tanggal transaksi, default hari ini.
+  date          DateTime      @default(now())
+  /// Penerima dana, mis. "Bengkel", "ATK".
+  recipient     String        @db.VarChar(160)
+  amount        Decimal       @db.Decimal(14, 2)
+  description   String?
+  paymentMethod PaymentMethod
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  proofs ExpenseProof[]
+
+  @@index([date])
+  @@map("expenses")
+}
+
+model ExpenseProof {
+  id           String   @id @default(uuid())
+  fileName     String   @unique
+  originalName String
+  mimeType     String
+  size         Int
+  createdAt    DateTime @default(now())
+
+  expenseId String
+  expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+
+  @@index([expenseId])
+  @@map("expense_proofs")
+}

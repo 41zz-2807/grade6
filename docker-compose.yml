@@ -1,0 +1,43 @@
+name: giis-grade6-kas
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: giis-grade6-kas:0.1.0
+    container_name: giis-grade6-kas
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Semua tanggal/waktu ditampilkan dalam zona waktu ini.
+      TZ: ${APP_TIMEZONE:-Asia/Jakarta}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Jakarta}
+      API_PORT: "3001"
+      WEB_PORT: "3000"
+      API_INTERNAL_URL: http://127.0.0.1:3001
+      UPLOAD_DIR: /app/uploads
+      # Hanya domain ini yang boleh memanggil API lintas-origin.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://bilmary.my.id}
+    ports:
+      # Only the Next.js frontend is published. No nginx.
+      - "3004:3000"
+    volumes:
+      # Bukti transaksi (bukti transfer / kwitansi) disimpan di host, bukan di dalam image.
+      - ./upload:/app/uploads
+    networks:
+      - postgres_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+networks:
+  postgres_net:
+    # Existing network that the "postgres-15" container is attached to.
+    external: true
+    name: war-nt-web_default

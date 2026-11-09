@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Secrets - never commit
+.credential.txt
+*.credential.txt
+.env
+.env.*
+!.env.example
+credentials*
+
+# Next.js
+.next
+out
+next-env.d.ts
+
+# NestJS
+dist
+*.tsbuildinfo
+
+# Uploads / bukti transaksi (isi di-bind mount dari host, jangan di-commit)
+upload/*
+!upload/.gitkeep
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sisa file sementara dari sesi opencode (0 byte, bukan bagian proyek)
+opencode.-s.ses_*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# Local db artifacts
+*.db
+*.db-journal
